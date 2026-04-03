@@ -8,7 +8,8 @@ const emit = defineEmits<{
 }>();
 
 const tools = [
-  { id: 'attack', name: '攻击工具' }
+  { id: 'attack', name: '攻击工具' },
+  { id: 'filetransfer', name: '文件传输' }
 ];
 </script>
 

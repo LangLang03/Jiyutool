@@ -6,6 +6,8 @@ use crate::jiyu::network::{
 };
 use serde_json::json;
 use std::process::Command;
+use std::thread;
+use tauri::Emitter;
 
 #[tauri::command]
 pub fn send_message(
@@ -286,4 +288,175 @@ pub fn start_reverse_shell(ip: String, port: Option<u16>) -> CommandResult {
 #[cfg(not(target_os = "windows"))]
 pub fn start_reverse_shell(_ip: String, _port: Option<u16>) -> CommandResult {
     CommandResult::error("此功能仅支持Windows")
+}
+
+use crate::jiyu::discovery::DeviceDiscovery;
+use crate::jiyu::file_transfer::FileTransferService;
+use crate::jiyu::protocol::{DeviceInfo, IncomingFileRequest, TransferProgress};
+use std::sync::Arc;
+use tauri::State;
+
+pub struct AppState {
+    pub file_transfer: Arc<FileTransferService>,
+    pub discovery: Arc<DeviceDiscovery>,
+}
+
+#[tauri::command]
+pub fn init_file_transfer(app_state: State<AppState>) -> CommandResult {
+    match app_state.file_transfer.start() {
+        Ok(_) => CommandResult::success_with_data(
+            "文件传输服务已启动",
+            serde_json::json!({
+                "uuid": app_state.file_transfer.get_uuid(),
+                "device_name": app_state.file_transfer.get_device_name(),
+                "ip": app_state.file_transfer.get_ip(),
+                "port": app_state.file_transfer.get_port()
+            }),
+        ),
+        Err(e) => CommandResult::error(&e),
+    }
+}
+
+#[tauri::command]
+pub fn scan_devices(app_state: State<AppState>) -> CommandResult {
+    let devices = app_state.discovery.scan_subnet(None);
+    CommandResult::success_with_data(
+        &format!("发现 {} 个设备", devices.len()),
+        serde_json::json!({ "devices": devices }),
+    )
+}
+
+#[tauri::command]
+pub fn get_device_list(app_state: State<AppState>) -> CommandResult {
+    let devices = app_state.discovery.get_devices();
+    CommandResult::success_with_data(
+        &format!("当前 {} 个设备在线", devices.len()),
+        serde_json::json!({ "devices": devices }),
+    )
+}
+
+#[tauri::command]
+pub fn send_file(
+    app_state: State<AppState>,
+    app_handle: tauri::AppHandle,
+    target_uuid: String,
+    file_path: String,
+) -> CommandResult {
+    let device = match app_state.discovery.get_device_by_uuid(&target_uuid) {
+        Some(d) => d,
+        None => return CommandResult::error("未找到目标设备"),
+    };
+
+    let file_transfer = Arc::clone(&app_state.file_transfer);
+    let device_clone = device.clone();
+    let file_path_clone = file_path.clone();
+
+    thread::spawn(move || {
+        match file_transfer.send_file(&device_clone, &file_path_clone) {
+            Ok(transfer_id) => {
+                let _ = app_handle.emit("transfer-complete", serde_json::json!({
+                    "transfer_id": transfer_id,
+                    "success": true
+                }));
+            }
+            Err(e) => {
+                let _ = app_handle.emit("transfer-error", serde_json::json!({
+                    "error": e
+                }));
+            }
+        }
+    });
+
+    CommandResult::success("开始发送文件")
+}
+
+#[tauri::command]
+pub fn send_folder(
+    app_state: State<AppState>,
+    app_handle: tauri::AppHandle,
+    target_uuid: String,
+    folder_path: String,
+) -> CommandResult {
+    let device = match app_state.discovery.get_device_by_uuid(&target_uuid) {
+        Some(d) => d,
+        None => return CommandResult::error("未找到目标设备"),
+    };
+
+    let file_transfer = Arc::clone(&app_state.file_transfer);
+    let device_clone = device.clone();
+    let folder_path_clone = folder_path.clone();
+
+    thread::spawn(move || {
+        match file_transfer.send_folder(&device_clone, &folder_path_clone) {
+            Ok(transfer_id) => {
+                let _ = app_handle.emit("transfer-complete", serde_json::json!({
+                    "transfer_id": transfer_id,
+                    "success": true
+                }));
+            }
+            Err(e) => {
+                let _ = app_handle.emit("transfer-error", serde_json::json!({
+                    "error": e
+                }));
+            }
+        }
+    });
+
+    CommandResult::success("开始发送文件夹")
+}
+
+#[tauri::command]
+pub fn accept_file(
+    app_state: State<AppState>,
+    transfer_id: String,
+    save_path: String,
+) -> CommandResult {
+    match app_state.file_transfer.accept_file(&transfer_id, &save_path) {
+        Ok(_) => CommandResult::success("已接受文件"),
+        Err(e) => CommandResult::error(&e),
+    }
+}
+
+#[tauri::command]
+pub fn reject_file(
+    app_state: State<AppState>,
+    transfer_id: String,
+    reason: Option<String>,
+) -> CommandResult {
+    let reason = reason.unwrap_or_else(|| "用户拒绝".to_string());
+    match app_state.file_transfer.reject_file(&transfer_id, &reason) {
+        Ok(_) => CommandResult::success("已拒绝文件"),
+        Err(e) => CommandResult::error(&e),
+    }
+}
+
+#[tauri::command]
+pub fn get_transfer_status(app_state: State<AppState>) -> CommandResult {
+    let is_busy = app_state.file_transfer.is_busy();
+    CommandResult::success_with_data(
+        "获取状态成功",
+        serde_json::json!({
+            "is_busy": is_busy
+        }),
+    )
+}
+
+#[tauri::command]
+pub fn connect_device(
+    app_state: State<AppState>,
+    ip: String,
+    port: Option<u16>,
+) -> CommandResult {
+    let port = port.unwrap_or(4706);
+    
+    match app_state.discovery.connect_and_handshake(&ip, port) {
+        Some(device) => {
+            app_state.discovery.add_or_update_device(device.clone());
+            CommandResult::success_with_data(
+                &format!("已连接到 {}", device.ip),
+                serde_json::json!({ "device": device }),
+            )
+        }
+        None => CommandResult::error(&format!("无法连接到 {}:{}", ip, port)),
+    }
 }
