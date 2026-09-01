@@ -13,7 +13,7 @@ const modalType = ref('');
 const modalInput = ref('');
 const showStatusModal = ref(false);
 
-const displayIp = computed(() => {
+const _displayIp = computed(() => {
   if (allDevices.value && localIpPrefix.value) {
     return localIpPrefix.value;
   }
