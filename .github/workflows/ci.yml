@@ -1,0 +1,54 @@
+name: Build Tauri App
+
+on:
+  # 1. 立即构建：推送到 main 分支时触发
+  push:
+    branches: [ main ]
+  # 2. 每周构建：每周一 09:00 UTC 触发
+  schedule:
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write  # 允许创建 Release 和上传产物
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: 'npm'  # 如果你用 yarn 或 pnpm，请对应修改
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: npm ci  # 如果用 yarn 改为 yarn install，pnpm 改为 pnpm install
+
+      - name: Build Tauri app (MSI)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # 为定时构建和 main 分支构建使用不同的 tag 名称，避免冲突
+          tagName: ${{ github.event_name == 'schedule' && format('nightly-{0}', github.run_number) || github.ref_name }}
+          releaseName: ${{ github.event_name == 'schedule' && format('Nightly Build #{0}', github.run_number) || format('App v{0}', github.ref_name) }}
+          releaseDraft: true  # 先创建草稿 Release，方便检查
+          prerelease: ${{ github.event_name == 'schedule' }}  # 定时构建标记为预发布
+          args: --target x86_64-pc-windows-msvc
