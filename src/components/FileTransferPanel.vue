@@ -251,7 +251,7 @@ onMounted(async () => {
     incomingRequest.value = event.payload;
   });
 
-  await listen<{ transfer_id: string; success: boolean }>('transfer-complete', (event) => {
+  await listen<{ transfer_id: string; success: boolean }>('transfer-complete', (_event) => {
     isTransferring.value = false;
     setStatus('传输完成');
   });
